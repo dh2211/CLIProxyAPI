@@ -342,7 +342,7 @@ func (s *Server) homeHeartbeatMiddleware() gin.HandlerFunc {
 		}
 		if c != nil && c.Request != nil {
 			path := c.Request.URL.Path
-			if strings.HasPrefix(path, "/v0/management/") || path == "/v0/management" || strings.HasPrefix(path, "/v8/management/") || path == "/v8/management" || strings.HasPrefix(path, "/v0/resource/plugins/") || path == "/management.html" {
+			if strings.HasPrefix(path, "/v0/management/") || path == "/v0/management" || strings.HasPrefix(path, "/v8/management/") || path == "/v8/management" || strings.HasPrefix(path, "/v0/resource/plugins/") || path == "/management.html" || path == "/v1/pool/status" {
 				c.Next()
 				return
 			}
@@ -410,6 +410,8 @@ func (s *Server) serveExampleAPIKeyWarningPage(c *gin.Context) {
 
 func isExampleAPIKeySafeModeProxyPath(path string) bool {
 	switch {
+	case path == "/v1/pool/status":
+		return false
 	case path == "/v1" || strings.HasPrefix(path, "/v1/"):
 		return true
 	case path == "/v1beta" || strings.HasPrefix(path, "/v1beta/"):
@@ -476,6 +478,79 @@ func corsAllowHeadersValue(req *http.Request) string {
 		}
 	}
 	return strings.Join(allowed, ", ")
+}
+
+// loopbackOnlyMiddleware restricts a route to connections originating from the
+// local machine. It inspects the socket peer address (never X-Forwarded-For),
+// so remote clients cannot spoof loopback access, and rejects requests that
+// carry an Origin header: browsers attach one to fetches, which would make
+// any web page opened on this machine a valid loopback client. The Host header
+// must also name a loopback identity, because DNS rebinding lets a remote page
+// keep its own hostname while resolving to a loopback peer. This is not an
+// access-control boundary: any local process, tunnel, or reverse proxy on the
+// host presents a loopback peer, so the route must not be proxied.
+func (s *Server) loopbackOnlyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		remoteAddr := ""
+		origin := ""
+		hostHeader := ""
+		if c != nil && c.Request != nil {
+			remoteAddr = strings.TrimSpace(c.Request.RemoteAddr)
+			origin = strings.TrimSpace(c.Request.Header.Get("Origin"))
+			hostHeader = c.Request.Host
+		}
+		host := remoteAddr
+		if parsedHost, _, err := net.SplitHostPort(remoteAddr); err == nil {
+			host = parsedHost
+		}
+		ip := net.ParseIP(strings.TrimSpace(host))
+		if ip == nil || !ip.IsLoopback() || origin != "" || !s.poolStatusHostAllowed(hostHeader) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "forbidden",
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
+// poolStatusHostAllowed reports whether a request Host header names a loopback
+// identity: a loopback IP, "localhost", or a hostname configured through
+// pool-status-allowed-hosts. Matching is port-agnostic and case-insensitive.
+func (s *Server) poolStatusHostAllowed(hostHeader string) bool {
+	host := normalizeHostIdentity(hostHeader)
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	var cfg *config.Config
+	if s != nil {
+		cfg = s.getConfig()
+	}
+	if cfg == nil {
+		return false
+	}
+	for _, extra := range cfg.PoolStatusAllowedHosts {
+		if strings.EqualFold(host, normalizeHostIdentity(extra)) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeHostIdentity strips an optional port and IP-literal brackets so a
+// Host header or configured hostname can be compared by name.
+func normalizeHostIdentity(raw string) string {
+	host := strings.TrimSpace(raw)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	return strings.Trim(strings.TrimSpace(host), "[]")
 }
 
 // AuthMiddleware returns a Gin middleware handler that authenticates requests

@@ -57,6 +57,16 @@ server:
   #   - 127.0.0.1
   #   - 192.0.2.0/24
 
+  # Extra Host header names accepted by the local-only /v1/pool/status endpoint.
+  # Loopback IPs and "localhost" are always allowed; list custom local hostnames
+  # here when the endpoint is reached through one. Ports and brackets on
+  # entries are ignored. This list only narrows
+  # Host-header-based bypasses (DNS rebinding); it is NOT an access-control
+  # boundary. Any local process, tunnel, or reverse proxy on this host reaches
+  # the endpoint with a loopback peer, so do not expose this path through any
+  # reverse proxy, tunnel, or port forwarder.
+  pool-status-allowed-hosts: []
+
   # TLS settings for HTTPS. When enabled, the server listens with the provided certificate and key.
   tls:
     enable: false
@@ -233,6 +243,13 @@ routing:
     # Cooldown duration in seconds for transient upstream errors (408/500/502/503/504/520-526).
     # Set to 0 to keep the legacy 60-second cooldown; set to -1 to disable transient error cooldowns.
     transient-error-cooldown-seconds: 0
+
+    # Interval in seconds between background re-probes of credentials whose cooldown
+    # timer expired. A synthetic minimal request periodically re-verifies upstream
+    # recovery, reducing the chance that a user request acts as the canary.
+    # Disabled by default; set to a positive interval (for example 30) to opt in.
+    # Has no effect while Home mode is enabled: the loop only runs outside Home.
+    reprobe-interval-seconds: 0
 
 # Shared request/response behavior.
 requests:

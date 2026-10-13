@@ -42,6 +42,7 @@ const (
 
 // StartAutoRefresh launches a background loop that evaluates auth freshness
 // every few seconds and triggers refresh operations when required.
+// It also starts the cooldown re-probe loop, which shares the same lifecycle.
 // Only one loop is kept alive; starting a new one cancels the previous run.
 func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duration) {
 	if interval <= 0 {
@@ -68,11 +69,16 @@ func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duratio
 
 	loop.rebuild(time.Now())
 	go loop.run(ctx)
+
+	// Cooldown re-probing shares the refresh loop's lifecycle; the loop itself
+	// is a no-op while routing.cooldown.reprobe-interval-seconds is disabled.
+	m.startCooldownReprobe(ctx)
 }
 
-// StopAutoRefresh cancels the background refresh loop, if running.
-// It also stops the selector if it implements StoppableSelector.
+// StopAutoRefresh cancels the background refresh and cooldown re-probe loops,
+// if running. It also stops the selector if it implements StoppableSelector.
 func (m *Manager) StopAutoRefresh() {
+	m.stopCooldownReprobe()
 	m.mu.Lock()
 	cancel := m.refreshCancel
 	m.refreshCancel = nil
