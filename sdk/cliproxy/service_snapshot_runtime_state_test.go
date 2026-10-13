@@ -60,7 +60,7 @@ func TestHandleAuthUpdatesFileSnapshotKeepsCooldown(t *testing.T) {
 			}
 			retry := time.Minute
 			manager.MarkResult(ctx, coreauth.Result{AuthID: id, Provider: "claude", Model: model, RetryAfter: &retry,
-				Error: &coreauth.Error{Message: "rate limited", HTTPStatus: http.StatusTooManyRequests}})
+				Error: &coreauth.Error{Code: "usage_limit_reached", Message: "quota exceeded", HTTPStatus: http.StatusTooManyRequests}})
 			want, _ := manager.GetByID(id)
 			if !want.Unavailable || !want.Quota.Exceeded {
 				t.Fatalf("no cooldown after the 429: %+v", want)
