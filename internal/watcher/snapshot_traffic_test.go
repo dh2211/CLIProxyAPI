@@ -83,7 +83,7 @@ func trafficRequestResult(success bool) coreauth.Result {
 	if !success {
 		retryAfter := time.Minute
 		result.RetryAfter = &retryAfter
-		result.Error = &coreauth.Error{Message: "rate limited", HTTPStatus: 429}
+		result.Error = &coreauth.Error{Code: "usage_limit_reached", Message: "quota exceeded", HTTPStatus: 429}
 	}
 	return result
 }

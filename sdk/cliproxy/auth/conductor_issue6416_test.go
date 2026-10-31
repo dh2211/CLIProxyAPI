@@ -32,6 +32,7 @@ func (e *issue6416TestExecutor) Execute(_ context.Context, auth *Auth, _ cliprox
 	if token == "old-access-token" || token == "old-api-key" {
 		return cliproxyexecutor.Response{}, &Error{
 			HTTPStatus: http.StatusTooManyRequests,
+			Code:       "usage_limit_reached",
 			Message:    "rate limited on old credential",
 		}
 	}
@@ -586,7 +587,7 @@ func TestManager_Issue6416_DirectMarkResult_StaleCredentialVersionIgnored(t *tes
 		Model:             model,
 		Success:           false,
 		CredentialVersion: 1,
-		Error:             &Error{HTTPStatus: http.StatusTooManyRequests, Message: "stale 429"},
+		Error:             &Error{HTTPStatus: http.StatusTooManyRequests, Code: "usage_limit_reached", Message: "stale 429"},
 	})
 
 	afterStale, _ := m.GetByID(authID)
@@ -604,7 +605,7 @@ func TestManager_Issue6416_DirectMarkResult_StaleCredentialVersionIgnored(t *tes
 		Model:             model,
 		Success:           false,
 		CredentialVersion: 0,
-		Error:             &Error{HTTPStatus: http.StatusTooManyRequests, Message: "stale 429 v0"},
+		Error:             &Error{HTTPStatus: http.StatusTooManyRequests, Code: "usage_limit_reached", Message: "stale 429 v0"},
 	})
 
 	afterStaleZero, _ := m.GetByID(authID)
@@ -622,7 +623,7 @@ func TestManager_Issue6416_DirectMarkResult_StaleCredentialVersionIgnored(t *tes
 		Model:             model,
 		Success:           false,
 		CredentialVersion: 2,
-		Error:             &Error{HTTPStatus: http.StatusTooManyRequests, Message: "current 429"},
+		Error:             &Error{HTTPStatus: http.StatusTooManyRequests, Code: "usage_limit_reached", Message: "current 429"},
 	})
 
 	afterCurrent, _ := m.GetByID(authID)
