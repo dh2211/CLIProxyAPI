@@ -1178,7 +1178,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							// refreshes the propagated outer layer.
 							if !result.CredentialScope {
 								state.credentialQuotaShadow = nil
-							} else if !state.credentialQuotaPropagated && savedOuterState.Quota.Reason != "credential_quota" {
+							} else if isQuota && !state.credentialQuotaPropagated && savedOuterState.Quota.Reason != "credential_quota" {
 								// First wrap of the reporting model: preserve any live prior
 								// own block (including an ordinary model-scoped 429, which
 								// quota restoration does not supersede). An outer
@@ -1218,14 +1218,16 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 										// from mistaking its own earlier layer for independence.
 										alreadyPropagated := otherState.credentialQuotaPropagated ||
 											otherState.Quota.Reason == "credential_quota"
-										if !alreadyPropagated {
+										if isQuota && !alreadyPropagated {
 											if isModelStateActiveCooldown(otherState, now) && !isDevinQuotaExhaustionMessage(devinStateErrorText(otherState)) {
 												otherState.credentialQuotaShadow = otherState.cloneShallow()
 											} else {
 												otherState.credentialQuotaShadow = nil
 											}
 										}
-										otherState.credentialQuotaPropagated = true
+										if isQuota {
+											otherState.credentialQuotaPropagated = true
+										}
 										otherState.Unavailable = true
 										otherState.Status = StatusError
 										otherQuotaNext := credentialNext
@@ -1276,7 +1278,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 									// The reporting model is now part of the wrap too: mark it
 									// so a later credential report from another model cannot
 									// snapshot this credential-derived state as independent.
-									state.credentialQuotaPropagated = true
+									if isQuota {
+										state.credentialQuotaPropagated = true
+									}
 								}
 							}
 						case 408, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526:
