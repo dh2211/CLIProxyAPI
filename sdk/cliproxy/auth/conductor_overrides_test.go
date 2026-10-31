@@ -1789,6 +1789,8 @@ func TestManager_DeepSeekCredentialFailuresRotateCredential(t *testing.T) {
 			}
 			if tc.wantQuota && (!state.Quota.Exceeded || state.Quota.Reason != "quota") {
 				t.Fatalf("failed auth quota state = %#v, want exceeded quota", state.Quota)
+			} else if !tc.wantQuota && state.Quota.Exceeded {
+				t.Fatalf("failed auth quota state = %#v, want quota not exceeded", state.Quota)
 			}
 		})
 	}
