@@ -724,3 +724,130 @@ func TestMarkResult_429WithResetGreaterThan30MinWithoutUsageLimit_DoesNotMarkQuo
 		}
 	}
 }
+
+func TestMarkResult_ModelScopedRateLimit_DoesNotMarkCredentialUnavailableOrBlockSiblings(t *testing.T) {
+	withQuotaCooldownEnabled(t)
+
+	authDir := t.TempDir()
+	store := NewFileCooldownStateStore(authDir)
+	manager := NewManager(nil, nil, nil)
+	manager.SetCooldownStateStore(store)
+
+	auth := &Auth{
+		ID:       "auth-model-ratelimit",
+		Provider: "openai",
+		Status:   StatusActive,
+		ModelStates: map[string]*ModelState{
+			"gpt-4o":      {Status: StatusActive},
+			"gpt-4o-mini": {Status: StatusActive},
+		},
+	}
+	if _, errRegister := manager.Register(WithSkipPersist(context.Background()), auth); errRegister != nil {
+		t.Fatalf("Register error: %v", errRegister)
+	}
+
+	retry := 30 * time.Second
+	manager.MarkResult(context.Background(), Result{
+		AuthID:          auth.ID,
+		Provider:        "openai",
+		Model:           "gpt-4o",
+		Success:         false,
+		RetryAfter:      &retry,
+		CredentialScope: false,
+		Error: &Error{
+			HTTPStatus: http.StatusTooManyRequests,
+			Code:       "rate_limit_exceeded",
+			Message:    "Rate limit reached for model gpt-4o",
+		},
+	})
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("auth missing")
+	}
+
+	m1 := updated.ModelStates["gpt-4o"]
+	if m1 == nil {
+		t.Fatal("gpt-4o missing")
+	}
+	if !m1.Unavailable {
+		t.Fatal("gpt-4o should be unavailable during rate limit cooldown")
+	}
+	if m1.Quota.Exceeded {
+		t.Fatal("gpt-4o Quota.Exceeded should be false")
+	}
+	if m1.Quota.Reason != "rate_limit" {
+		t.Fatalf("gpt-4o Quota.Reason = %q, want 'rate_limit'", m1.Quota.Reason)
+	}
+
+	m2 := updated.ModelStates["gpt-4o-mini"]
+	if m2 == nil {
+		t.Fatal("gpt-4o-mini missing")
+	}
+	if m2.Unavailable {
+		t.Fatal("sibling gpt-4o-mini should NOT be marked unavailable")
+	}
+	if m2.Quota.Exceeded || m2.Quota.Reason != "" {
+		t.Fatalf("sibling gpt-4o-mini should not have quota failure, got reason=%q exceeded=%v", m2.Quota.Reason, m2.Quota.Exceeded)
+	}
+
+	if updated.Unavailable {
+		t.Fatal("credential must NOT be marked unavailable when healthy sibling models exist")
+	}
+
+	manager.MarkResult(context.Background(), Result{
+		AuthID:            auth.ID,
+		Provider:          "openai",
+		Model:             "gpt-4o-mini",
+		Success:           true,
+		CompletedResponse: true,
+	})
+
+	updated, _ = manager.GetByID(auth.ID)
+	if !updated.InferenceVerified {
+		t.Fatal("successful response on healthy sibling must set InferenceVerified = true")
+	}
+	if updated.Unavailable {
+		t.Fatal("auth should remain available after sibling success")
+	}
+	m1 = updated.ModelStates["gpt-4o"]
+	if !m1.Unavailable || m1.Quota.Reason != "rate_limit" {
+		t.Fatal("gpt-4o should retain its rate limit cooldown after sibling success")
+	}
+
+	manager.MarkResult(context.Background(), Result{
+		AuthID:          auth.ID,
+		Provider:        "openai",
+		Model:           "gpt-4o-mini",
+		Success:         false,
+		CredentialScope: false,
+		Error: &Error{
+			HTTPStatus: http.StatusInternalServerError,
+			Message:    "internal error",
+		},
+	})
+
+	updated, _ = manager.GetByID(auth.ID)
+	m2 = updated.ModelStates["gpt-4o-mini"]
+	if m2.Quota.Reason == "credential_quota" {
+		t.Fatalf("sibling model must not receive credential_quota wrap on non-credential failure, got %q", m2.Quota.Reason)
+	}
+
+	records, errLoad := store.Load(context.Background())
+	if errLoad != nil {
+		t.Fatalf("Load error: %v", errLoad)
+	}
+	for _, rec := range records {
+		if rec.Model == "gpt-4o" {
+			if rec.Reason != "rate_limit" {
+				t.Fatalf("persisted record for gpt-4o has reason %q, want 'rate_limit'", rec.Reason)
+			}
+			if rec.Quota.Reason != "rate_limit" {
+				t.Fatalf("persisted record Quota.Reason has %q, want 'rate_limit'", rec.Quota.Reason)
+			}
+			if rec.Quota.Exceeded {
+				t.Fatal("persisted record Quota.Exceeded should be false")
+			}
+		}
+	}
+}

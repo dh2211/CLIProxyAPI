@@ -412,8 +412,8 @@ func (m *Manager) restoreCooldownRecordLocked(record CooldownStateRecord, now ti
 		isModelStateActiveCooldown(state, now) && !isDevinQuotaExhaustionMessage(devinStateErrorText(state)) {
 		liveShadow = state.cloneShallow()
 	}
-	wasLiveWrapped := state.credentialQuotaPropagated || state.Quota.Reason == "credential_quota" || state.Quota.Reason == "rate_limit" ||
-		((auth.Quota.Reason == "credential_quota" || auth.Quota.Reason == "rate_limit") && auth.Quota.NextRecoverAt.After(now))
+	wasLiveWrapped := state.credentialQuotaPropagated || state.Quota.Reason == "credential_quota" ||
+		(auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now))
 	mergeModelState(state, &ModelState{
 		Unavailable:    true,
 		Status:         StatusError,
@@ -970,7 +970,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			isAuthActiveCooldown(auth, now) && auth.cooldownRecordedSeq > 0 && result.ExecutionSeq <= auth.cooldownRecordedSeq
 
 		if result.Success {
-			if result.CompletedResponse && !result.SkipQuotaObservation && !wasTerminalUnauthorized && !((auth.Quota.Reason == "credential_quota" || auth.Quota.Reason == "rate_limit") && auth.Quota.NextRecoverAt.After(now)) && !retainModelCooldown && !retainAuthCooldown {
+			if result.CompletedResponse && !result.SkipQuotaObservation && !wasTerminalUnauthorized && !(auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now)) && !retainModelCooldown && !retainAuthCooldown {
 				auth.InferenceVerified = true
 				auth.LastInferenceVerifiedAt = now
 			}
@@ -980,7 +980,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					modelState = state
 					resetModelState(state, now)
 				}
-			} else if (auth.Quota.Reason == "credential_quota" || auth.Quota.Reason == "rate_limit") && auth.Quota.NextRecoverAt.After(now) {
+			} else if auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now) {
 				// Retain active credential-scoped cooldown
 			} else if retainModelCooldown || retainAuthCooldown {
 				// Retain a cooldown recorded after this execution was dispatched.
@@ -1010,8 +1010,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					// applying a new result (issue #6690): reinstate the
 					// independent layer (or a clean slate) and drop stale wrap
 					// provenance so a future window snapshots fresh state.
-					isCredentialWrapActive := (auth.Quota.Reason == "credential_quota" || auth.Quota.Reason == "rate_limit") && auth.Quota.NextRecoverAt.After(now)
-					if (state.credentialQuotaPropagated || state.Quota.Reason == "credential_quota" || state.Quota.Reason == "rate_limit") &&
+					isCredentialWrapActive := auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now)
+					if (state.credentialQuotaPropagated || state.Quota.Reason == "credential_quota") &&
 						!isCredentialWrapActive {
 						if shadow := state.credentialQuotaShadow; shadow != nil && isModelStateActiveCooldown(shadow, now) {
 							preservedSeq := shadow.cooldownRecordedSeq
@@ -1129,7 +1129,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 									backoffLevel = auth.Quota.BackoffLevel
 								}
 							}
-							isQuota := isUsageLimitResultError(result.Error) || isAnthropicUnifiedQuota(responseHeaders, auth.Quota.Signals)
+							isQuota := isUsageLimitResultError(result.Error)
 							resetDuration, hasResetDuration := resolve429ResetDuration(result.Error, result.RetryAfter, now)
 							if !disableCooling {
 								if hasResetDuration {
@@ -1200,8 +1200,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 									if otherState != nil && otherState != state {
 										// Normalize a naturally expired wrap first (issue #6690) so a
 										// stale marker cannot suppress snapshotting a fresh block.
-										isCredentialWrapActive := (auth.Quota.Reason == "credential_quota" || auth.Quota.Reason == "rate_limit") && auth.Quota.NextRecoverAt.After(now)
-										if (otherState.credentialQuotaPropagated || otherState.Quota.Reason == "credential_quota" || otherState.Quota.Reason == "rate_limit") &&
+										isCredentialWrapActive := auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now)
+										if (otherState.credentialQuotaPropagated || otherState.Quota.Reason == "credential_quota") &&
 											!isCredentialWrapActive {
 											if shadow := otherState.credentialQuotaShadow; shadow != nil && isModelStateActiveCooldown(shadow, now) {
 												preservedSeq := shadow.cooldownRecordedSeq
@@ -1361,7 +1361,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					disableCooling = false
 				}
 				if !wasTerminalUnauthorized {
-					applyAuthFailureState(auth, result.Error, result.RetryAfter, now, disableCooling, responseHeaders)
+					applyAuthFailureState(auth, result.Error, result.RetryAfter, now, disableCooling)
 					auth.cooldownRecordedSeq = m.currentExecutionSeq()
 				}
 			}
@@ -1779,7 +1779,7 @@ func updateAggregatedAvailability(auth *Auth, now time.Time) {
 		auth.Unavailable = true
 		return
 	}
-	if (auth.Quota.Reason == "credential_quota" || auth.Quota.Reason == "rate_limit") && auth.Quota.NextRecoverAt.After(now) {
+	if auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now) {
 		auth.Unavailable = true
 		return
 	}
@@ -2631,59 +2631,6 @@ func isStructuredQuotaCode(code string) bool {
 	}
 }
 
-func isAnthropicUnifiedQuota(headers http.Header, signals map[string]string) bool {
-	if isAnthropicUnifiedQuotaHeaders(headers) {
-		return true
-	}
-	if len(signals) > 0 {
-		if strings.EqualFold(signals["Anthropic-Ratelimit-Unified-5h-Status"], "rejected") ||
-			strings.EqualFold(signals["Anthropic-Ratelimit-Unified-7d-Status"], "rejected") ||
-			strings.EqualFold(signals["Anthropic-Ratelimit-Unified-7d_oi-Status"], "rejected") {
-			return true
-		}
-		if strings.EqualFold(signals["Anthropic-Ratelimit-Unified-Status"], "rejected") {
-			s5 := strings.ToLower(strings.TrimSpace(signals["Anthropic-Ratelimit-Unified-5h-Status"]))
-			s7 := strings.ToLower(strings.TrimSpace(signals["Anthropic-Ratelimit-Unified-7d-Status"]))
-			if (s5 == "allowed" || s5 == "allowed_warning") && (s7 == "allowed" || s7 == "allowed_warning") {
-				return false
-			}
-			return true
-		}
-	}
-	return false
-}
-
-func isAnthropicUnifiedQuotaHeaders(headers http.Header) bool {
-	if headers == nil {
-		return false
-	}
-	for key, values := range headers {
-		lowerKey := strings.ToLower(key)
-		if lowerKey == "anthropic-ratelimit-unified-5h-status" ||
-			lowerKey == "anthropic-ratelimit-unified-7d-status" ||
-			lowerKey == "anthropic-ratelimit-unified-7d_oi-status" {
-			for _, val := range values {
-				if strings.EqualFold(strings.TrimSpace(val), "rejected") {
-					return true
-				}
-			}
-		}
-		if lowerKey == "anthropic-ratelimit-unified-status" {
-			for _, val := range values {
-				if strings.EqualFold(strings.TrimSpace(val), "rejected") {
-					s5 := strings.ToLower(strings.TrimSpace(headers.Get("Anthropic-Ratelimit-Unified-5h-Status")))
-					s7 := strings.ToLower(strings.TrimSpace(headers.Get("Anthropic-Ratelimit-Unified-7d-Status")))
-					if (s5 == "allowed" || s5 == "allowed_warning") && (s7 == "allowed" || s7 == "allowed_warning") {
-						continue
-					}
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
 // resolve429ResetDuration extracts any reset timestamp or relative duration advertised
 // by upstream 429 responses (via Retry-After or response body fields like resets_at / resets_in_seconds).
 func resolve429ResetDuration(resultErr *Error, retryAfter *time.Duration, now time.Time) (time.Duration, bool) {
@@ -3157,13 +3104,9 @@ func isRequestInvalidError(err error) bool {
 	return false
 }
 
-func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Duration, now time.Time, disableCooling bool, headers ...http.Header) {
+func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Duration, now time.Time, disableCooling bool) {
 	if auth == nil {
 		return
-	}
-	var respHeaders http.Header
-	if len(headers) > 0 {
-		respHeaders = headers[0]
 	}
 	prevAuthRetryAfter := auth.NextRetryAfter
 	if shouldSkipCredentialCooldown(resultErr) {
@@ -3240,7 +3183,7 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 				auth.NextRetryAfter = now.Add(12 * time.Hour)
 			}
 		case 429:
-			isQuota := isUsageLimitResultError(resultErr) || isAnthropicUnifiedQuota(respHeaders, auth.Quota.Signals)
+			isQuota := isUsageLimitResultError(resultErr)
 			resetDuration, hasResetDuration := resolve429ResetDuration(resultErr, retryAfter, now)
 			var next time.Time
 			if !disableCooling {
