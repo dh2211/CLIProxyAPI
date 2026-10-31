@@ -193,7 +193,7 @@ func TestIssue7017CredentialScopedTransientFallsBackToQuota(t *testing.T) {
 	auth := &Auth{ID: "turn-scoped", Provider: "codex", Metadata: map[string]any{"type": "codex"}}
 	issue7017Register(t, manager, auth)
 
-	resultErr := resultErrorFromError(issue7017HintError{msg: issue7017TurnBody(), hint: &hint, scope: true})
+	resultErr := resultErrorFromError(issue7017HintError{msg: `{"error":{"type":"usage_limit_reached","code":"quota_exceeded","message":"Codex quota exceeded"}}`, hint: &hint, scope: true})
 	if resultErr.Code == ErrorCodeTransientRateLimit {
 		t.Fatal("credential-scoped errors must not downgrade to transient rate limit")
 	}

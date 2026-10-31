@@ -1760,6 +1760,76 @@ func TestCodexClientModelsResponse_NonTemplateCatalogStaysWithinOneMiB(t *testin
 	}
 }
 
+func TestCodexClientModelsResponse_GPT61Sol(t *testing.T) {
+	// Verify registry lookup has full capabilities and metadata
+	info := registry.LookupModelInfo("gpt-6.1-sol")
+	if info == nil {
+		t.Fatal("expected gpt-6.1-sol in model registry")
+	}
+	if info.DisplayName != "GPT 6.1 Sol" {
+		t.Errorf("display_name = %q, want 'GPT 6.1 Sol'", info.DisplayName)
+	}
+	if info.ContextLength != 272000 {
+		t.Errorf("context_length = %d, want 272000", info.ContextLength)
+	}
+	if info.MaxCompletionTokens != 128000 {
+		t.Errorf("max_completion_tokens = %d, want 128000", info.MaxCompletionTokens)
+	}
+	if !info.SupportConfigurationUpdate {
+		t.Error("expected support_configuration_update to be true")
+	}
+
+	// Verify Codex client catalog generation
+	resp := BuildResponseForClient([]map[string]any{{"id": "gpt-6.1-sol"}}, nil, false, "0.159.0")
+	entries, ok := resp["models"].([]map[string]any)
+	if !ok || len(entries) != 1 {
+		t.Fatalf("expected 1 model entry, got %d", len(entries))
+	}
+
+	entry := entries[0]
+	if got := stringModelValue(entry, "slug"); got != "gpt-6.1-sol" {
+		t.Errorf("slug = %q, want gpt-6.1-sol", got)
+	}
+	if got := stringModelValue(entry, "display_name"); got != "GPT-6.1-Sol" {
+		t.Errorf("display_name = %q, want GPT-6.1-Sol", got)
+	}
+	if got := intModelValue(entry, "context_window"); got != 500000 {
+		t.Errorf("context_window = %d, want 500000", got)
+	}
+	if got := intModelValue(entry, "max_context_window"); got != 872000 {
+		t.Errorf("max_context_window = %d, want 872000", got)
+	}
+	if got, _ := entry["supports_reasoning_effort_updates"].(bool); !got {
+		t.Errorf("supports_reasoning_effort_updates = %v, want true", entry["supports_reasoning_effort_updates"])
+	}
+	if got := stringModelValue(entry, "tool_mode"); got != "code_mode_only" {
+		t.Errorf("tool_mode = %q, want code_mode_only", got)
+	}
+	if got, _ := entry["use_responses_lite"].(bool); !got {
+		t.Errorf("use_responses_lite = %v, want true", entry["use_responses_lite"])
+	}
+
+	levels, ok := entry["supported_reasoning_levels"].([]any)
+	if !ok {
+		t.Fatalf("supported_reasoning_levels type = %T, want []any", entry["supported_reasoning_levels"])
+	}
+	efforts := make([]string, 0, len(levels))
+	for _, l := range levels {
+		if m, ok := l.(map[string]any); ok {
+			efforts = append(efforts, stringModelValue(m, "effort"))
+		}
+	}
+	wantEfforts := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
+	if len(efforts) != len(wantEfforts) {
+		t.Fatalf("supported_reasoning_levels = %v, want %v", efforts, wantEfforts)
+	}
+	for i, want := range wantEfforts {
+		if efforts[i] != want {
+			t.Errorf("effort[%d] = %q, want %q", i, efforts[i], want)
+		}
+	}
+}
+
 func assertCodexNullableFieldCleared(t *testing.T, entry map[string]any, key string) {
 	t.Helper()
 	value, exists := entry[key]

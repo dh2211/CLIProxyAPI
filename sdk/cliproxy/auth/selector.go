@@ -1542,6 +1542,15 @@ func (s *SessionAffinitySelector) Stop() {
 	}
 }
 
+// ActiveSessionCounts returns per-auth counts of unexpired session bindings
+// for observability. Aliases of the same logical session count once.
+func (s *SessionAffinitySelector) ActiveSessionCounts(now time.Time) map[string]int {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	return s.cache.ActiveSessionCounts(now)
+}
+
 // InvalidateAuth removes all session bindings for a specific auth.
 // Called when an auth becomes rate-limited or unavailable.
 func (s *SessionAffinitySelector) InvalidateAuth(authID string) {
@@ -1659,6 +1668,9 @@ func (s *SessionAffinitySelector) LookupAffinity(provider, model, sessionID stri
 // OnResult handles session affinity binding or release based on execution outcome.
 func (s *SessionAffinitySelector) OnResult(res Result) {
 	if s == nil || res.AuthID == "" {
+		return
+	}
+	if probe, _ := res.Options.Metadata[cliproxyexecutor.CooldownReprobeMetadataKey].(bool); probe {
 		return
 	}
 

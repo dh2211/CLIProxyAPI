@@ -32,6 +32,12 @@ type Config struct {
 	// The server applies this list at startup; changing it requires a restart.
 	TrustedProxies []string `yaml:"trusted-proxies" json:"trusted-proxies"`
 
+	// PoolStatusAllowedHosts lists additional Host header names accepted by the
+	// loopback-only /v1/pool/status endpoint. Loopback IPs and "localhost" are
+	// always allowed; add custom local hostnames here when the endpoint is
+	// served under one.
+	PoolStatusAllowedHosts []string `yaml:"pool-status-allowed-hosts" json:"pool-status-allowed-hosts"`
+
 	// TLS config controls HTTPS server settings.
 	TLS TLSConfig `yaml:"tls" json:"tls"`
 
@@ -97,6 +103,12 @@ type Config struct {
 	// TransientErrorCooldownSeconds controls cooldowns for transient upstream errors (408/500/502/503/504/520-526).
 	// 0 keeps the legacy default cooldown. Negative values disable these cooldowns.
 	TransientErrorCooldownSeconds int `yaml:"transient-error-cooldown-seconds" json:"transient-error-cooldown-seconds"`
+
+	// CooldownReprobeIntervalSeconds controls how often expired credential cooldowns are
+	// periodically re-probed with a minimal synthetic request, reducing the chance that
+	// a client request acts as the canary. Values <= 0 disable background re-probing.
+	// Has no effect while Home mode is enabled.
+	CooldownReprobeIntervalSeconds int `yaml:"cooldown-reprobe-interval-seconds" json:"cooldown-reprobe-interval-seconds"`
 
 	// AuthAutoRefreshWorkers overrides the size of the core auth auto-refresh and manual refresh-all worker pool.
 	// When <= 0, the default worker count is used.

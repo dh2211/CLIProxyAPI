@@ -1717,6 +1717,12 @@ func TestManager_DeepSeekCredentialFailuresRotateCredential(t *testing.T) {
 			name:      "rate limit with generic request error code",
 			status:    http.StatusTooManyRequests,
 			message:   `{"error":{"code":"invalid_request_error","message":"Rate Limit Reached","param":null,"type":"unknown_error"}}`,
+			wantQuota: false,
+		},
+		{
+			name:      "quota exhaustion with generic request error code",
+			status:    http.StatusTooManyRequests,
+			message:   `{"error":{"code":"invalid_request_error","message":"Quota Exceeded","param":null,"type":"usage_limit_reached"}}`,
 			wantQuota: true,
 		},
 	}
@@ -1783,6 +1789,8 @@ func TestManager_DeepSeekCredentialFailuresRotateCredential(t *testing.T) {
 			}
 			if tc.wantQuota && (!state.Quota.Exceeded || state.Quota.Reason != "quota") {
 				t.Fatalf("failed auth quota state = %#v, want exceeded quota", state.Quota)
+			} else if !tc.wantQuota && state.Quota.Exceeded {
+				t.Fatalf("failed auth quota state = %#v, want quota not exceeded", state.Quota)
 			}
 		})
 	}

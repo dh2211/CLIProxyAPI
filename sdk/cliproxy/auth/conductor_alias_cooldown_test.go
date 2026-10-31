@@ -41,7 +41,7 @@ func TestManagerAliasQuotaFailoverWithUnobservedTargetModel(t *testing.T) {
 				retryAfter := time.Hour
 				manager.MarkResult(context.Background(), Result{
 					AuthID: highID, Provider: "codex", Model: otherModel,
-					Error: &Error{HTTPStatus: http.StatusTooManyRequests, Message: "other model rate limit"}, RetryAfter: &retryAfter,
+					Error: &Error{HTTPStatus: http.StatusTooManyRequests, Code: "usage_limit_reached", Message: "other model quota exhausted"}, RetryAfter: &retryAfter,
 				})
 				high, _ := manager.GetByID(highID)
 				if !high.Unavailable || high.ModelStates[targetModel] != nil {
