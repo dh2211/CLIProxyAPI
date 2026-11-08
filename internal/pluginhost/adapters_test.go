@@ -3926,15 +3926,30 @@ func (panicFrontendAuthProvider) Authenticate(ctx context.Context, req pluginapi
 }
 
 type fakeAuthProvider struct {
-	identifier  string
-	parseAuth   func(context.Context, pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error)
-	startLogin  func(context.Context, pluginapi.AuthLoginStartRequest) (pluginapi.AuthLoginStartResponse, error)
-	pollLogin   func(context.Context, pluginapi.AuthLoginPollRequest) (pluginapi.AuthLoginPollResponse, error)
-	refreshAuth func(context.Context, pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error)
+	identifier          string
+	identifiers         []string
+	entries             []pluginapi.AuthProviderEntry
+	credentialProviders []string
+	parseAuth           func(context.Context, pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error)
+	startLogin          func(context.Context, pluginapi.AuthLoginStartRequest) (pluginapi.AuthLoginStartResponse, error)
+	pollLogin           func(context.Context, pluginapi.AuthLoginPollRequest) (pluginapi.AuthLoginPollResponse, error)
+	refreshAuth         func(context.Context, pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error)
 }
 
 func (p fakeAuthProvider) Identifier() string {
 	return p.identifier
+}
+
+func (p fakeAuthProvider) Identifiers() []string {
+	return append([]string(nil), p.identifiers...)
+}
+
+func (p fakeAuthProvider) AuthEntries() []pluginapi.AuthProviderEntry {
+	return append([]pluginapi.AuthProviderEntry(nil), p.entries...)
+}
+
+func (p fakeAuthProvider) CredentialProviders() []string {
+	return append([]string(nil), p.credentialProviders...)
 }
 
 func (p fakeAuthProvider) ParseAuth(ctx context.Context, req pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
@@ -4477,6 +4492,59 @@ func TestExecutorAdapterRefresh_MergesAttributesAndPreservesPath_Issue6119(t *te
 	}
 	if got := refreshed.Attributes["priority"]; got != "2" {
 		t.Errorf("refreshed priority attribute = %q, want 2", got)
+	}
+}
+
+func TestExecutorAdapterRefresh_PreservesDisabledState_Issue7225(t *testing.T) {
+	authProvider := fakeAuthProvider{
+		identifier: "plugin-provider",
+		refreshAuth: func(ctx context.Context, req pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error) {
+			return pluginapi.AuthRefreshResponse{
+				Auth: pluginapi.AuthData{
+					Metadata: map[string]any{"token": "new"},
+				},
+			}, nil
+		},
+	}
+	executorRecord := normalizeTestCapabilityRecord(capabilityRecord{id: "executor-plugin"})
+	host := newHostWithRecords(
+		capabilityRecord{
+			id: "auth-plugin",
+			plugin: pluginapi.Plugin{
+				Capabilities: pluginapi.Capabilities{
+					AuthProvider: authProvider,
+				},
+			},
+		},
+		executorRecord,
+	)
+
+	exec := &fakeExecutor{identifier: "ignored-by-adapter"}
+	adapter := newExecutorAdapterForRecordForTest(host, executorRecord, exec,
+		[]sdktranslator.Format{sdktranslator.FormatOpenAI},
+		[]sdktranslator.Format{sdktranslator.FormatOpenAI},
+	)
+
+	auth := &coreauth.Auth{
+		ID:       "auth-1",
+		Provider: "plugin-provider",
+		Disabled: true,
+		Status:   coreauth.StatusDisabled,
+		Metadata: map[string]any{"token": "old"},
+	}
+
+	refreshed, errRefresh := adapter.Refresh(context.Background(), auth)
+	if errRefresh != nil {
+		t.Fatalf("Refresh() error = %v", errRefresh)
+	}
+	if refreshed == nil {
+		t.Fatal("Refresh() = nil, want refreshed auth")
+	}
+	if !refreshed.Disabled || refreshed.Status != coreauth.StatusDisabled {
+		t.Fatalf("Refresh() disabled=%t status=%q, want disabled auth to stay disabled", refreshed.Disabled, refreshed.Status)
+	}
+	if got := refreshed.Metadata["token"]; got != "new" {
+		t.Fatalf("Refresh() token = %q, want new", got)
 	}
 }
 

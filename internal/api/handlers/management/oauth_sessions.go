@@ -40,9 +40,11 @@ var ErrSIWCCallbackRequiresV8 = fmt.Errorf("%w: SIWC callbacks require /v8/manag
 type oauthRecoveryTarget struct {
 	AuthID           string
 	FileName         string
+	Path             string
 	Provider         string
 	Email            string
 	AccountID        string
+	OrganizationID   string
 	VerifyAfterLogin bool
 	VerifyModel      string
 }
