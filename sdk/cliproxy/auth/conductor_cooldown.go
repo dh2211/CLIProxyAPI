@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	gjson "github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -22,7 +23,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
 )
 
 var quotaCooldownDisabled atomic.Bool
@@ -1077,7 +1077,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							NextRecoverAt: next,
 							BackoffLevel:  backoffLevel,
 						})
-					} else if isInvalidGrantResultError(result.Error) {
+					} else if isInvalidGrantResultError(result.Error) || isCreditBalanceTooLowResultError(result.Error) {
 						if disableCooling {
 							state.NextRetryAfter = time.Time{}
 						} else {
@@ -1129,7 +1129,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 									backoffLevel = auth.Quota.BackoffLevel
 								}
 							}
-							isQuota := isUsageLimitResultError(result.Error)
+							isQuota := isUsageLimitResultError(result.Error) || responseHeadersOrSignalsIndicateQuotaRejection(responseHeaders, auth.Quota.Signals)
 							resetDuration, hasResetDuration := resolve429ResetDuration(result.Error, result.RetryAfter, now)
 							if !disableCooling {
 								if hasResetDuration {
@@ -1980,9 +1980,32 @@ func statusCodeFromError(err error) int {
 	return 0
 }
 
+func errorCodeFromError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var authErr *Error
+	if errors.As(err, &authErr) && authErr != nil && strings.TrimSpace(authErr.Code) != "" {
+		return strings.TrimSpace(authErr.Code)
+	}
+	type errorCoder interface {
+		ErrorCode() string
+	}
+	var ec errorCoder
+	if errors.As(err, &ec) && ec != nil {
+		return strings.TrimSpace(ec.ErrorCode())
+	}
+	return ""
+}
+
 func isRequestScopedError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// A preserved terminal response belongs to this request unless the executor
+	// explicitly classifies the rejection as safe to retry on another credential.
+	if isRequestTerminatedError(err) && !isCredentialScopedError(err) {
+		return true
 	}
 	requestErr, ok := errors.AsType[cliproxyexecutor.RequestScopedError](err)
 	return ok && requestErr != nil && requestErr.IsRequestScoped()
@@ -2020,6 +2043,9 @@ func resultErrorFromError(err error) *Error {
 		resultErr = cloneError(sourceErr)
 	} else {
 		resultErr = &Error{Message: err.Error()}
+	}
+	if resultErr.Code == "" {
+		resultErr.Code = errorCodeFromError(err)
 	}
 	if resultErr.HTTPStatus == 0 {
 		resultErr.HTTPStatus = statusCodeFromError(err)
@@ -2319,7 +2345,8 @@ var (
 
 func isKnownSafeOAuthErrorCode(code string) bool {
 	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "refresh_token_reused",
+	case "refresh_outcome_unknown",
+		"refresh_token_reused",
 		"refresh_token_expired",
 		"refresh_token_invalidated",
 		"token_revoked",
@@ -2379,6 +2406,7 @@ func sanitizeRenewalMessage(raw string) string {
 func isTerminalRefreshGrantMessage(message string) bool {
 	lower := strings.ToLower(message)
 	for _, token := range []string{
+		"refresh_outcome_unknown",
 		"refresh_token_reused",
 		"refresh_token_expired",
 		"refresh_token_invalidated",
@@ -2404,6 +2432,10 @@ func isTerminalRefreshError(auth *Auth, err error) bool {
 		return isTerminalRefreshError(auth, partErr.OuterRefreshError()) ||
 			isTerminalRefreshError(auth, partErr.SIWCRefreshError())
 	}
+	var authErr *Error
+	if errors.As(err, &authErr) && authErr != nil && isTerminalRefreshGrantMessage(authErr.Code) {
+		return true
+	}
 	if isUnauthorizedError(err) || isTerminalRefreshGrantMessage(err.Error()) {
 		return true
 	}
@@ -2416,6 +2448,7 @@ func isTerminalRefreshError(auth *Auth, err error) bool {
 func terminalRefreshErrorCode(message string, statusCode int) string {
 	lower := strings.ToLower(message)
 	for _, code := range []string{
+		"refresh_outcome_unknown",
 		"refresh_token_reused",
 		"refresh_token_expired",
 		"refresh_token_invalidated",
@@ -2462,8 +2495,13 @@ func sanitizeRenewalError(auth *Auth, err error) *Error {
 		}
 	}
 	terminal := isTerminalRefreshError(auth, err)
+	code := terminalRefreshErrorCode(raw, statusCode)
+	var existingAuthErr *Error
+	if errors.As(err, &existingAuthErr) && existingAuthErr != nil && isKnownSafeOAuthErrorCode(existingAuthErr.Code) {
+		code = strings.ToLower(strings.TrimSpace(existingAuthErr.Code))
+	}
 	return &Error{
-		Code:       terminalRefreshErrorCode(raw, statusCode),
+		Code:       code,
 		Message:    sanitizeRenewalMessage(raw),
 		HTTPStatus: statusCode,
 		Retryable:  !terminal,
@@ -2600,6 +2638,8 @@ func isUsageLimitResultError(err *Error) bool {
 		strings.Contains(msgLower, "weekly quota") ||
 		strings.Contains(msgLower, "daily quota") ||
 		strings.Contains(msgLower, "usage quota") ||
+		strings.Contains(msgLower, "model quota") ||
+		strings.Contains(msgLower, "account quota") ||
 		strings.Contains(msgLower, "usage credits") ||
 		strings.Contains(msgLower, "credits are required") ||
 		strings.Contains(msgLower, "shared window") ||
@@ -2628,11 +2668,37 @@ func isUsageLimitResultError(err *Error) bool {
 // isStructuredQuotaCode reports whether code matches a known upstream quota exhaustion code.
 func isStructuredQuotaCode(code string) bool {
 	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "quota", "insufficient_quota", "usage_limit_reached", "quota_exceeded", "usage_limit", "quota_exhausted":
+	case "quota", "insufficient_quota", "usage_limit_reached", "quota_exceeded", "usage_limit", "quota_exhausted", "model_quota", "account_quota":
 		return true
 	default:
 		return false
 	}
+}
+
+func responseHeadersOrSignalsIndicateQuotaRejection(headers http.Header, signals map[string]string) bool {
+	if headers != nil {
+		for key, values := range headers {
+			lowerKey := strings.ToLower(key)
+			if strings.Contains(lowerKey, "unified-7d") || strings.Contains(lowerKey, "unified-5h") || lowerKey == "anthropic-ratelimit-unified-status" {
+				for _, v := range values {
+					if strings.EqualFold(strings.TrimSpace(v), "rejected") {
+						return true
+					}
+				}
+			}
+		}
+	}
+	if len(signals) > 0 {
+		for key, val := range signals {
+			lowerKey := strings.ToLower(key)
+			if strings.Contains(lowerKey, "unified-7d") || strings.Contains(lowerKey, "unified-5h") || lowerKey == "anthropic-ratelimit-unified-status" {
+				if strings.EqualFold(strings.TrimSpace(val), "rejected") {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // resolve429ResetDuration extracts any reset timestamp or relative duration advertised
@@ -2739,6 +2805,35 @@ func isInvalidGrantResultError(err *Error) bool {
 	return false
 }
 
+func isCreditBalanceTooLowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	status := statusCodeFromError(err)
+	if clienterror.IsCreditBalanceTooLow(status, err) {
+		return true
+	}
+	var authErr *Error
+	if errors.As(err, &authErr) && authErr != nil && authErr.Message != "" {
+		return clienterror.IsCreditBalanceTooLow(status, errors.New(authErr.Message))
+	}
+	return false
+}
+
+func isCreditBalanceTooLowResultError(err *Error) bool {
+	if err == nil {
+		return false
+	}
+	status := statusCodeFromResult(err)
+	if clienterror.IsCreditBalanceTooLow(status, err) {
+		return true
+	}
+	if err.Message != "" {
+		return clienterror.IsCreditBalanceTooLow(status, errors.New(err.Message))
+	}
+	return false
+}
+
 func isModelSupportResultError(err *Error) bool {
 	if err == nil {
 		return false
@@ -2821,11 +2916,43 @@ func isRequestScopedResultError(err *Error) bool {
 }
 
 func isCountTokensEndpointNotFoundError(err error, requestedModel string) bool {
-	if err == nil || statusCodeFromError(err) != http.StatusNotFound {
+	if err == nil {
 		return false
 	}
 	baseModel := thinking.ParseSuffix(requestedModel).ModelName
-	return !isExplicitModelNotFoundError(err, baseModel)
+	if isExplicitModelNotFoundError(err, baseModel) {
+		return false
+	}
+	status := statusCodeFromError(err)
+	if status == http.StatusNotFound {
+		return true
+	}
+	if isCredentialScopedError(err) || isCloudflareChallengeError(err) || isInvalidGrantError(err) || isCreditBalanceTooLowError(err) || isModelSupportErrorMessage(err.Error()) {
+		return false
+	}
+	switch status {
+	case http.StatusNotImplemented:
+		return true
+	case 0:
+		return isCountTokensUnsupportedErrorCode(errorCodeFromError(err)) || errors.Is(err, errors.ErrUnsupported)
+	default:
+		return false
+	}
+}
+
+func isCountTokensUnsupportedErrorCode(value string) bool {
+	normalized := strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(value)))
+	switch normalized {
+	case "not_implemented",
+		"count_tokens_unsupported",
+		"count_tokens_not_supported",
+		"unsupported_operation",
+		"unsupported_capability",
+		"method_not_implemented":
+		return true
+	default:
+		return false
+	}
 }
 
 func isResponsesCompactRequest(opts cliproxyexecutor.Options) bool {
@@ -2836,7 +2963,7 @@ func isResponsesCompactRequestFaultError(opts cliproxyexecutor.Options, err erro
 	if !isResponsesCompactRequest(opts) || err == nil {
 		return false
 	}
-	if isCredentialScopedError(err) || isCloudflareChallengeError(err) || isInvalidGrantError(err) {
+	if isCredentialScopedError(err) || isCloudflareChallengeError(err) || isInvalidGrantError(err) || isCreditBalanceTooLowError(err) {
 		return false
 	}
 	status := statusCodeFromError(err)
@@ -2864,10 +2991,10 @@ func isResponsesCompactAvailabilityNeutralError(opts cliproxyexecutor.Options, e
 	if resultErr != nil && resultErr.Code == ErrorCodeForceCooldown {
 		return false
 	}
-	if isCredentialScopedError(err) || isCloudflareChallengeError(err) || isInvalidGrantError(err) {
+	if isCredentialScopedError(err) || isCloudflareChallengeError(err) || isInvalidGrantError(err) || isCreditBalanceTooLowError(err) {
 		return false
 	}
-	if resultErr != nil && (isCloudflareChallengeResultError(resultErr) || isInvalidGrantResultError(resultErr)) {
+	if resultErr != nil && (isCloudflareChallengeResultError(resultErr) || isInvalidGrantResultError(resultErr) || isCreditBalanceTooLowResultError(resultErr)) {
 		return false
 	}
 	status := statusCodeFromError(err)
@@ -2883,6 +3010,9 @@ func isResponsesCompactAvailabilityNeutralError(opts cliproxyexecutor.Options, e
 func isExplicitModelNotFoundError(err error, requestedModel string) bool {
 	if err == nil {
 		return false
+	}
+	if isModelNotFoundIdentifier(errorCodeFromError(err)) {
+		return true
 	}
 	var authErr *Error
 	if errors.As(err, &authErr) && authErr != nil {
@@ -3090,6 +3220,9 @@ func isRequestInvalidError(err error) bool {
 	if isInvalidGrantError(err) {
 		return false
 	}
+	if isCreditBalanceTooLowError(err) {
+		return false
+	}
 	if isModelSupportError(err) {
 		return false
 	}
@@ -3161,6 +3294,13 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		} else {
 			auth.NextRetryAfter = now.Add(30 * time.Minute)
 		}
+	} else if isCreditBalanceTooLowResultError(resultErr) {
+		auth.StatusMessage = "payment_required"
+		if disableCooling {
+			auth.NextRetryAfter = time.Time{}
+		} else {
+			auth.NextRetryAfter = now.Add(30 * time.Minute)
+		}
 	} else {
 		switch statusCode {
 		case 401:
@@ -3187,7 +3327,7 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 				auth.NextRetryAfter = now.Add(12 * time.Hour)
 			}
 		case 429:
-			isQuota := isUsageLimitResultError(resultErr)
+			isQuota := isUsageLimitResultError(resultErr) || responseHeadersOrSignalsIndicateQuotaRejection(nil, auth.Quota.Signals)
 			resetDuration, hasResetDuration := resolve429ResetDuration(resultErr, retryAfter, now)
 			var next time.Time
 			if !disableCooling {
