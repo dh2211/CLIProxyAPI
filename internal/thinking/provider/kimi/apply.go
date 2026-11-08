@@ -72,31 +72,6 @@ func (a *Applier) ApplyDoc(doc *ojson.Doc, config thinking.ThinkingConfig, model
 }
 
 func resolveKimiAction(config thinking.ThinkingConfig, modelInfo *registry.ModelInfo) (effort string, disable bool, ok bool) {
-	if thinking.IsUserDefinedModel(modelInfo) {
-		switch config.Mode {
-		case thinking.ModeLevel:
-			if config.Level == "" {
-				return "", false, false
-			}
-			return string(config.Level), false, true
-		case thinking.ModeNone:
-			if config.Level == "" || config.Level == thinking.LevelNone {
-				return "", true, true
-			}
-			return string(config.Level), false, true
-		case thinking.ModeAuto:
-			return string(thinking.LevelAuto), false, true
-		case thinking.ModeBudget:
-			level, okConvert := thinking.ConvertBudgetToLevel(config.Budget)
-			if !okConvert {
-				return "", false, false
-			}
-			return level, false, true
-		default:
-			return "", false, false
-		}
-	}
-
 	switch config.Mode {
 	case thinking.ModeLevel:
 		if config.Level == "" {

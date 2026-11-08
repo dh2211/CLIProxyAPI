@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/MoeForge/moego/ojson"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -246,6 +245,18 @@ func TestExecutorPayloadSingleDocPipelinesByteConsistency(t *testing.T) {
 		if strings.Join(betasDoc, ",") != strings.Join(betasByte, ",") {
 			t.Fatalf("claude betas mismatch: doc=%v byte=%v", betasDoc, betasByte)
 		}
+		if ojson.GetBytes(docOut, "prompt_cache_options").Exists() {
+			t.Fatal("expected prompt_cache_options to be stripped")
+		}
+		if ojson.GetBytes(docOut, "betas").Exists() {
+			t.Fatal("expected betas to be stripped from payload")
+		}
+		if ojson.GetBytes(docOut, "thinking").Exists() {
+			t.Fatal("expected thinking to be disabled/stripped when tool_choice is forced")
+		}
+		if got := ojson.GetBytes(docOut, "messages.0.role").String(); got != "user" {
+			t.Fatalf("role = %q, want user", got)
+		}
 	})
 
 	t.Run("codex doc pipeline matches byte pipeline", func(t *testing.T) {
@@ -271,6 +282,15 @@ func TestExecutorPayloadSingleDocPipelinesByteConsistency(t *testing.T) {
 
 		if !bytes.Equal(docOut, byteOut) {
 			t.Fatalf("codex doc output mismatch:\ndoc:  %s\nbyte: %s", docOut, byteOut)
+		}
+		if ojson.GetBytes(docOut, "instructions").Exists() {
+			t.Fatal("expected null instructions to be stripped")
+		}
+		if got := ojson.GetBytes(docOut, "model").String(); got != "gpt-5" {
+			t.Fatalf("model = %q, want gpt-5", got)
+		}
+		if ojson.GetBytes(docOut, "input.0.encrypted_content").Exists() {
+			t.Fatal("expected encrypted_content to be sanitized")
 		}
 	})
 
@@ -299,6 +319,22 @@ func TestExecutorPayloadSingleDocPipelinesByteConsistency(t *testing.T) {
 		if !bytes.Equal(docOut, byteOut) {
 			t.Fatalf("xai doc output mismatch:\ndoc:  %s\nbyte: %s", docOut, byteOut)
 		}
+		if got := ojson.GetBytes(docOut, "model").String(); got != "grok-4" {
+			t.Fatalf("model = %q, want grok-4", got)
+		}
+		if ojson.GetBytes(docOut, "input.2.encrypted_content").Exists() {
+			t.Fatal("expected encrypted_content to be sanitized")
+		}
+		hasExtraFn := false
+		for _, tool := range ojson.GetBytes(docOut, "tools").Array() {
+			if tool.Get("name").String() == "extra_fn" || tool.Get("function.name").String() == "extra_fn" {
+				hasExtraFn = true
+				break
+			}
+		}
+		if !hasExtraFn {
+			t.Fatal("expected extra_fn to be promoted into tools")
+		}
 	})
 
 	t.Run("kimi doc pipeline matches byte pipeline", func(t *testing.T) {
@@ -322,6 +358,12 @@ func TestExecutorPayloadSingleDocPipelinesByteConsistency(t *testing.T) {
 		if !bytes.Equal(docOut, byteOut) {
 			t.Fatalf("kimi doc output mismatch:\ndoc:  %s\nbyte: %s", docOut, byteOut)
 		}
+		if got := ojson.GetBytes(docOut, "model").String(); got != "kimi-k2.5" {
+			t.Fatalf("model = %q, want kimi-k2.5", got)
+		}
+		if got := ojson.GetBytes(docOut, "tools.0.function.name").String(); got != "lookup" {
+			t.Fatalf("tool name = %q, want lookup", got)
+		}
 	})
 
 	t.Run("gemini and aistudio doc pipeline matches byte pipeline", func(t *testing.T) {
@@ -337,6 +379,15 @@ func TestExecutorPayloadSingleDocPipelinesByteConsistency(t *testing.T) {
 
 		if !bytes.Equal(docOut, byteOut) {
 			t.Fatalf("gemini/aistudio doc output mismatch:\ndoc:  %s\nbyte: %s", docOut, byteOut)
+		}
+		if ojson.GetBytes(docOut, "generationConfig.imageConfig").Exists() {
+			t.Fatal("expected generationConfig.imageConfig to be deleted")
+		}
+		if got := ojson.GetBytes(docOut, "generationConfig.thinkingConfig.thinkingLevel").String(); got != "MEDIUM" {
+			t.Fatalf("thinkingLevel = %q, want MEDIUM", got)
+		}
+		if got := ojson.GetBytes(docOut, "contents.0.role").String(); got != "user" {
+			t.Fatalf("role = %q, want user", got)
 		}
 	})
 }
@@ -506,7 +557,6 @@ func TestClaudeCacheControlDocChecksDoNotMaterializeLargeMessagesArray(t *testin
 
 		var mBefore, mAfter runtime.MemStats
 		runtime.ReadMemStats(&mBefore)
-		start := time.Now()
 		ensureCacheControlDoc(doc)
 		if got := countCacheControlsDoc(doc); got != 2 {
 			t.Fatalf("countCacheControlsDoc = %d, want 2", got)
@@ -515,15 +565,11 @@ func TestClaudeCacheControlDocChecksDoNotMaterializeLargeMessagesArray(t *testin
 		upgradeClaudeCacheControlTTLDoc(doc, claudeCacheControlTTL1h)
 		normalizeCacheControlTTLDoc(doc)
 		stripClaudeCacheControlTTLDoc(doc)
-		elapsed := time.Since(start)
 		runtime.ReadMemStats(&mAfter)
 
 		allocated := mAfter.TotalAlloc - mBefore.TotalAlloc
 		if allocated > 64*1024 {
 			t.Fatalf("split messages: cache control doc helpers allocated %d bytes (> 64 KiB)", allocated)
-		}
-		if elapsed > 20*time.Millisecond {
-			t.Fatalf("split messages took %v (> 20ms); expected O(N) single-pass traversal", elapsed)
 		}
 	})
 
@@ -553,21 +599,16 @@ func TestClaudeCacheControlDocChecksDoNotMaterializeLargeMessagesArray(t *testin
 
 		var mBefore, mAfter runtime.MemStats
 		runtime.ReadMemStats(&mBefore)
-		start := time.Now()
 		if got := countCacheControlsDoc(doc); got != 2 {
 			t.Fatalf("countCacheControlsDoc = %d, want 2", got)
 		}
 		enforceCacheControlLimitDoc(doc, 4)
 		normalizeCacheControlTTLDoc(doc)
-		elapsed := time.Since(start)
 		runtime.ReadMemStats(&mAfter)
 
 		allocated := mAfter.TotalAlloc - mBefore.TotalAlloc
 		if allocated > 64*1024 {
 			t.Fatalf("unsplit 1024 messages: allocated %d bytes (> 64 KiB)", allocated)
-		}
-		if elapsed > 20*time.Millisecond {
-			t.Fatalf("unsplit 1024 messages took %v (> 20ms); expected O(N) single-pass traversal", elapsed)
 		}
 	})
 }

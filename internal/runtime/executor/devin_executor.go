@@ -831,7 +831,7 @@ func (e *DevinExecutor) streamDevinFramesForAuth(
 		emitSlotArgumentsDelta := func(stepIdx int, arguments string, invalidJSON bool) bool {
 			deltaDoc := ojson.NewDoc([]byte(`{"event_type":"step.delta","index":0,"delta":{"type":"arguments_delta","arguments":""}}`))
 			_ = deltaDoc.Set("index", stepIdx)
-			_ = setDevinStringWithoutHTMLEscapeDoc(deltaDoc, "delta.arguments", arguments)
+			_ = translatorcommon.SetStringWithoutHTMLEscapeDoc(deltaDoc, "delta.arguments", arguments)
 			if invalidJSON {
 				_ = deltaDoc.Set("delta.invalid_json_str", true)
 			}
@@ -920,13 +920,13 @@ func (e *DevinExecutor) streamDevinFramesForAuth(
 					if sawEOS && streamErr == nil && ctx.Err() == nil && !slot.hasJSON && slot.name != "" && helps.IsApplyPatchUpstreamTool(originalReq, slot.name) {
 						if wrapped, ok := helps.RecoverDevinBareApplyPatch(rawInvalid); ok {
 							patchDiagnostics.MarkRecovered(slot.diagKey)
-							_ = setDevinStringWithoutHTMLEscapeDoc(deltaDoc, "delta.arguments", wrapped)
+							_ = translatorcommon.SetStringWithoutHTMLEscapeDoc(deltaDoc, "delta.arguments", wrapped)
 						} else {
-							_ = setDevinStringWithoutHTMLEscapeDoc(deltaDoc, "delta.arguments", rawInvalid)
+							_ = translatorcommon.SetStringWithoutHTMLEscapeDoc(deltaDoc, "delta.arguments", rawInvalid)
 							_ = deltaDoc.Set("delta.invalid_json_str", true)
 						}
 					} else {
-						_ = setDevinStringWithoutHTMLEscapeDoc(deltaDoc, "delta.arguments", rawInvalid)
+						_ = translatorcommon.SetStringWithoutHTMLEscapeDoc(deltaDoc, "delta.arguments", rawInvalid)
 						_ = deltaDoc.Set("delta.invalid_json_str", true)
 					}
 					if !emitInteractionsEvent(deltaDoc.Bytes()) {
@@ -1636,7 +1636,7 @@ func consumeDevinFramesToInteractionsForAuth(body io.Reader, model, chatModelUID
 			if json.Valid([]byte(tc.Arguments)) {
 				_ = fnDoc.SetRawBytes("arguments", []byte(tc.Arguments))
 			} else {
-				_ = setDevinStringWithoutHTMLEscapeDoc(fnDoc, "arguments", tc.Arguments)
+				_ = translatorcommon.SetStringWithoutHTMLEscapeDoc(fnDoc, "arguments", tc.Arguments)
 			}
 		}
 		steps = append(steps, fnDoc.Bytes())
@@ -2894,20 +2894,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func setDevinStringWithoutHTMLEscapeDoc(doc *ojson.Doc, path, value string) error {
-	if doc == nil {
-		return nil
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if errEncode := enc.Encode(value); errEncode != nil {
-		return doc.Set(path, value)
-	}
-	raw := bytes.TrimRight(buf.Bytes(), "\n")
-	return doc.SetRawBytes(path, raw)
 }
 
 // SupportsApplyPatch reports the actual executor contract, independent of its provider name.

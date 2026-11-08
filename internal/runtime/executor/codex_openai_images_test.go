@@ -485,30 +485,34 @@ func TestCodexExecutorDirectOpenAIImageEditUsesImagesEditEndpointForMultipart(t 
 }
 
 func TestCodexExecutorDirectOpenAIImage25And26Models(t *testing.T) {
-	testModels := []string{
-		"gpt-image-2.5",
-		"gpt-image-2.5-flare",
-		"gpt-image-2.5-sunburst",
-		"gpt-image-2.6",
-		"gpt-image-2.6-flare",
-		"gpt-image-2.6-sunburst",
-		"codex/gpt-image-2.5",
-		"codex/gpt-image-2.5-flare",
-		"codex/gpt-image-2.5-sunburst",
-		"codex/gpt-image-2.6",
-		"codex/gpt-image-2.6-flare",
-		"codex/gpt-image-2.6-sunburst",
-		"GPT-Image-2.5(medium)",
-		"codex/GPT-Image-2.5-Flare(high)",
-		"GPT-Image-2.6(medium)",
-		"codex/GPT-Image-2.6-Flare(high)",
+	testCases := []struct {
+		model    string
+		expected string
+	}{
+		{model: "gpt-image-2.5", expected: "gpt-image-2.5"},
+		{model: "gpt-image-2.5-flare", expected: "gpt-image-2.5-flare"},
+		{model: "gpt-image-2.5-sunburst", expected: "gpt-image-2.5-sunburst"},
+		{model: "gpt-image-2.6", expected: "gpt-image-2.6"},
+		{model: "gpt-image-2.6-flare", expected: "gpt-image-2.6-flare"},
+		{model: "gpt-image-2.6-sunburst", expected: "gpt-image-2.6-sunburst"},
+		{model: "codex/gpt-image-2.5", expected: "gpt-image-2.5"},
+		{model: "codex/gpt-image-2.5-flare", expected: "gpt-image-2.5-flare"},
+		{model: "codex/gpt-image-2.5-sunburst", expected: "gpt-image-2.5-sunburst"},
+		{model: "codex/gpt-image-2.6", expected: "gpt-image-2.6"},
+		{model: "codex/gpt-image-2.6-flare", expected: "gpt-image-2.6-flare"},
+		{model: "codex/gpt-image-2.6-sunburst", expected: "gpt-image-2.6-sunburst"},
+		{model: "GPT-Image-2.5(medium)", expected: "gpt-image-2.5"},
+		{model: "codex/GPT-Image-2.5-Flare(high)", expected: "gpt-image-2.5-flare"},
+		{model: "GPT-Image-2.6(medium)", expected: "gpt-image-2.6"},
+		{model: "codex/GPT-Image-2.6-Flare(high)", expected: "gpt-image-2.6-flare"},
 	}
 
-	for _, model := range testModels {
+	for _, tc := range testCases {
+		model := tc.model
+		expectedModel := tc.expected
 		t.Run("generate/"+model, func(t *testing.T) {
-			baseModel := codexOpenAIImageBaseModel(model)
-			if !codexIsDirectOpenAIImageModel(baseModel) {
-				t.Fatalf("expected codexIsDirectOpenAIImageModel(%q) = true", baseModel)
+			if !codexIsDirectOpenAIImageModel(expectedModel) {
+				t.Fatalf("expected codexIsDirectOpenAIImageModel(%q) = true", expectedModel)
 			}
 
 			var gotPath string
@@ -537,13 +541,12 @@ func TestCodexExecutorDirectOpenAIImage25And26Models(t *testing.T) {
 			if gotPath != "/images/generations" {
 				t.Fatalf("path = %q, want /images/generations", gotPath)
 			}
-			if got := ojson.GetBytes(gotBody, "model").String(); got != baseModel {
-				t.Fatalf("model = %q, want %s; body=%s", got, baseModel, string(gotBody))
+			if got := ojson.GetBytes(gotBody, "model").String(); got != expectedModel {
+				t.Fatalf("model = %q, want %s; body=%s", got, expectedModel, string(gotBody))
 			}
 		})
 
 		t.Run("edit/"+model, func(t *testing.T) {
-			baseModel := codexOpenAIImageBaseModel(model)
 			var gotPath string
 			var gotBody []byte
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -570,13 +573,12 @@ func TestCodexExecutorDirectOpenAIImage25And26Models(t *testing.T) {
 			if gotPath != "/images/edits" {
 				t.Fatalf("path = %q, want /images/edits", gotPath)
 			}
-			if got := ojson.GetBytes(gotBody, "model").String(); got != baseModel {
-				t.Fatalf("model = %q, want %s; body=%s", got, baseModel, string(gotBody))
+			if got := ojson.GetBytes(gotBody, "model").String(); got != expectedModel {
+				t.Fatalf("model = %q, want %s; body=%s", got, expectedModel, string(gotBody))
 			}
 		})
 
 		t.Run("stream/"+model, func(t *testing.T) {
-			baseModel := codexOpenAIImageBaseModel(model)
 			var gotPath string
 			var gotBody []byte
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -608,8 +610,8 @@ func TestCodexExecutorDirectOpenAIImage25And26Models(t *testing.T) {
 			if gotPath != "/images/generations" {
 				t.Fatalf("path = %q, want /images/generations", gotPath)
 			}
-			if got := ojson.GetBytes(gotBody, "model").String(); got != baseModel {
-				t.Fatalf("model = %q, want %s; body=%s", got, baseModel, string(gotBody))
+			if got := ojson.GetBytes(gotBody, "model").String(); got != expectedModel {
+				t.Fatalf("model = %q, want %s; body=%s", got, expectedModel, string(gotBody))
 			}
 		})
 	}

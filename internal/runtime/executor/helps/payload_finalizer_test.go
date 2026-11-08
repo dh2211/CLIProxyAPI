@@ -333,10 +333,9 @@ func TestApplyPayloadConfigDocSequentialDefaultObjectAndNestedField(t *testing.T
 	ApplyPayloadConfigWithRootDoc(cfg, "gpt-5", "openai", "", doc, nil, "", "")
 	got := doc.Bytes()
 
-	if ojson.GetBytesNoCopy(got, "metadata.x").Int() != ojson.GetBytesNoCopy(want, "metadata.x").Int() {
-		t.Fatalf("doc metadata.x = %d, want %d (got=%s want=%s)",
+	if ojson.GetBytesNoCopy(got, "metadata.x").Int() != 1 {
+		t.Fatalf("doc metadata.x = %d, want 1 (got=%s want=%s)",
 			ojson.GetBytesNoCopy(got, "metadata.x").Int(),
-			ojson.GetBytesNoCopy(want, "metadata.x").Int(),
 			got, want)
 	}
 	if ojson.GetBytesNoCopy(got, "metadata.y").Int() != 3 {

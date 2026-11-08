@@ -76,27 +76,6 @@ func prepareKimiThinkingReplayRequest(ctx context.Context, req cliproxyexecutor.
 	return req, scope
 }
 
-func prepareKimiThinkingReplayRequestDoc(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, doc *ojson.Doc) kimiThinkingReplayScope {
-	scope := kimiThinkingReplayScopeFromRequest(ctx, req, opts)
-	if !scope.valid() || doc == nil {
-		return scope
-	}
-	content, snapshot, found, errGet := internalcache.GetKimiThinkingReplayWithSnapshotRequired(ctx, scope.modelFamily, scope.sessionKey)
-	scope.snapshot = snapshot
-	scope.cacheReady = errGet == nil
-	if errGet != nil {
-		log.Warnf("kimi thinking replay cache read failed: %v", errGet)
-		return scope
-	}
-	if !found {
-		return scope
-	}
-	if restoreKimiThinkingReplayContentDoc(doc, content) {
-		scope.replayApplied = true
-	}
-	return scope
-}
-
 func cacheKimiThinkingReplayResponse(ctx context.Context, scope kimiThinkingReplayScope, response []byte) {
 	if !scope.valid() || !scope.cacheReady {
 		return

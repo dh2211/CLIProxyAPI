@@ -198,6 +198,26 @@ func applyPayloadConfigWithTrackedPathsForExecutorDoc(cfg *config.Config, target
 					createdByDefault[resolvedPath] = struct{}{}
 				}
 			}
+			hasDefaultConflict := func(path string) bool {
+				if _, ok := appliedDefaults[path]; ok {
+					return true
+				}
+				for idx := 0; idx < len(path); idx++ {
+					if path[idx] == '.' && (idx == 0 || path[idx-1] != '\\') {
+						prefix := path[:idx]
+						if _, ok := appliedDefaults[prefix]; ok && doc.Get(path).Exists() {
+							return true
+						}
+					}
+				}
+				prefixWithDot := path + "."
+				for applied := range appliedDefaults {
+					if strings.HasPrefix(applied, prefixWithDot) {
+						return true
+					}
+				}
+				return false
+			}
 
 			// Apply default rules: first write wins per field across all matching rules.
 			for i := range rules.Default {
@@ -214,7 +234,7 @@ func applyPayloadConfigWithTrackedPathsForExecutorDoc(cfg *config.Config, target
 						if sourcePathExists(resolvedPath) {
 							continue
 						}
-						if _, ok := appliedDefaults[resolvedPath]; ok {
+						if hasDefaultConflict(resolvedPath) {
 							continue
 						}
 						recordDefaultCreation(resolvedPath)
@@ -242,7 +262,7 @@ func applyPayloadConfigWithTrackedPathsForExecutorDoc(cfg *config.Config, target
 						if sourcePathExists(resolvedPath) {
 							continue
 						}
-						if _, ok := appliedDefaults[resolvedPath]; ok {
+						if hasDefaultConflict(resolvedPath) {
 							continue
 						}
 						rawValue, ok := payloadRawValue(value)

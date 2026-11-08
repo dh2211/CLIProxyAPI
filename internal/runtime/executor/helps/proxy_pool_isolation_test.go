@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -70,7 +71,7 @@ func TestProxyPoolIsolatesCredentials(t *testing.T) {
 		t.Fatal("identical credentials must map to one scope")
 	}
 	// A human readable label is not an identity.
-	if proxyPoolScope(&cliproxyauth.Auth{Label: "same"}) != proxyPoolScope(&cliproxyauth.Auth{Label: "same"}) {
+	if proxyPoolScope(&cliproxyauth.Auth{Label: "label-a"}) != proxyPoolScope(&cliproxyauth.Auth{Label: "label-b"}) {
 		t.Fatal("label-only auths must share the anonymous scope")
 	}
 	if got := proxyPoolScope(&cliproxyauth.Auth{Label: "shared"}); got != proxyPoolAnonymousScope {
@@ -127,8 +128,13 @@ func TestProxyPoolCapacityBoundsManyCredentials(t *testing.T) {
 	// A hot credential keeps its pool while cold ones churn through it.
 	hot := poolOptInAuth("hot")
 	hotTransport := pooledProxyTransport("direct", cfg, hot)
-	for i := 0; i < 16; i++ {
+	for i := 0; i < proxyPoolCapacity+16; i++ {
 		pooledProxyTransport("direct", cfg, poolOptInAuth("cold-"+strconv.Itoa(i)))
+		if i%64 == 0 {
+			if tr := pooledProxyTransport("direct", cfg, hot); tr != hotTransport {
+				t.Fatalf("hot credential lost its pool during churn at iteration %d", i)
+			}
+		}
 	}
 	if pooledProxyTransport("direct", cfg, hot) != hotTransport {
 		t.Fatal("recently used credential lost its pool")
@@ -187,7 +193,11 @@ func TestEvictedTransportDoesNotRebuildIdlePool(t *testing.T) {
 
 	// Because the transport was already evicted, tryPutIdleConn must reject parking
 	// the socket and close it immediately when the response finishes.
-	<-closedCh
+	select {
+	case <-closedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for evicted transport socket to close")
+	}
 }
 
 // TestProxyPoolDropsUnexpectedlyClosedConnection covers requirement 3: when the

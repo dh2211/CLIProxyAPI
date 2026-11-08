@@ -214,7 +214,7 @@ func parseCodexQuotaHeadersObject(headersNode ojson.Result) http.Header {
 	}
 	headers := make(http.Header)
 	headersNode.ForEach(func(key, value ojson.Result) bool {
-		name := http.CanonicalHeaderKey(strings.TrimSpace(key.String()))
+		name := http.CanonicalHeaderKey(strings.Clone(strings.TrimSpace(key.String())))
 		if !isCodexQuotaHeaderName(name) {
 			return true
 		}

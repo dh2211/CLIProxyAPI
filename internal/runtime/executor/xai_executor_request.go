@@ -485,13 +485,6 @@ func xaiBytesMayContainImageRef(b []byte) bool {
 		bytes.Contains(b, []byte(`\u`))
 }
 
-func xaiStringMayContainImageRef(s string) bool {
-	return strings.Contains(s, `"image"`) ||
-		strings.Contains(s, `"images"`) ||
-		strings.Contains(s, `"reference_images"`) ||
-		strings.Contains(s, `\u`)
-}
-
 const (
 	xaiKeyOther uint8 = iota
 	xaiKeyImage
@@ -1762,14 +1755,6 @@ func xaiToolChoiceRequiresHostedToolOnlyAny(body []byte) bool {
 func xaiToolChoiceRequiresHostedToolOnlyAnyDoc(doc *ojson.Doc) bool {
 	return xaiToolChoiceRequiresHostedToolOnlyDoc(doc, xaiImageGenerationToolType) ||
 		xaiToolChoiceRequiresHostedToolOnlyDoc(doc, xaiWebSearchToolType)
-}
-
-func xaiSetToolChoiceString(body []byte, value string) []byte {
-	updated, errSet := ojson.SetBytes(body, "tool_choice", value)
-	if errSet != nil {
-		return body
-	}
-	return updated
 }
 
 // pruneXAIOrphanedToolChoice removes tool_choice entries that no longer match

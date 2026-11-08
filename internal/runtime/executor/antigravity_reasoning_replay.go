@@ -490,37 +490,7 @@ func antigravityReplayRequestEnvelopeFromDoc(doc *ojson.Doc) ([]byte, bool) {
 	if requestNode := doc.Get("request"); requestNode.IsObject() {
 		return []byte(`{"request":` + requestNode.Raw + `}`), true
 	}
-	contents := doc.Get("request.contents")
-	if !contents.Exists() {
-		return nil, false
-	}
-	var buf bytes.Buffer
-	buf.WriteString(`{"request":{`)
-	wrote := false
-	for _, field := range []struct {
-		key  string
-		path string
-	}{
-		{key: "systemInstruction", path: "request.systemInstruction"},
-		{key: "tools", path: "request.tools"},
-		{key: "toolConfig", path: "request.toolConfig"},
-		{key: "contents", path: "request.contents"},
-	} {
-		val := doc.Get(field.path)
-		if !val.Exists() {
-			continue
-		}
-		if wrote {
-			buf.WriteByte(',')
-		}
-		buf.WriteByte('"')
-		buf.WriteString(field.key)
-		buf.WriteString(`":`)
-		buf.WriteString(val.Raw)
-		wrote = true
-	}
-	buf.WriteString(`}}`)
-	return buf.Bytes(), true
+	return nil, false
 }
 
 func applyAntigravityReasoningReplayItems(payload []byte, items [][]byte, toolSchemas map[string]any) ([]byte, bool) {

@@ -187,14 +187,15 @@ func TestProxyConnectionPoolSettingsIsolation(t *testing.T) {
 		t.Fatal("transport not reused")
 	}
 	auth.ProxyConnectionPool.IdleConnTimeout = "20s"
-	if pooledProxyTransport("direct", cfg, auth) == first {
+	second := pooledProxyTransport("direct", cfg, auth)
+	if second == first {
 		t.Fatal("different settings reused transport")
 	}
-	if pooledProxyTransport("http://localhost:1234", cfg, auth) == first {
+	if pooledProxyTransport("http://localhost:1234", cfg, auth) == second {
 		t.Fatal("different proxies reused transport")
 	}
 	ResetProxyTransports()
-	if pooledProxyTransport("direct", cfg, auth) == first {
+	if pooledProxyTransport("direct", cfg, auth) == second {
 		t.Fatal("reset did not remove transport")
 	}
 }
