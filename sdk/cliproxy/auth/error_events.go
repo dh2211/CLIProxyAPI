@@ -108,7 +108,7 @@ func errorEventModelStatusFrom(model string, authSnapshot *Auth) *errorEventMode
 	if model == "" || authSnapshot == nil || authSnapshot.ModelStates == nil {
 		return nil
 	}
-	state := authSnapshot.ModelStates[model]
+	state := existingModelState(authSnapshot, model)
 	if state == nil {
 		return nil
 	}
