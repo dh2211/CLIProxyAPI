@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -55,6 +56,9 @@ func newServerExitCommand(t *testing.T, dir string, args ...string) (*exec.Cmd, 
 	stderr := &bytes.Buffer{}
 	command.Stdout = stdout
 	command.Stderr = stderr
+	if runtime.GOOS != "windows" {
+		command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	}
 	return command, stdout, stderr
 }
 
