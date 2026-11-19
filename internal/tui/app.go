@@ -529,7 +529,7 @@ func RunWithBaseURL(baseURL string, secretKey string, hook *LogHook, output io.W
 	// Transient probe failures (503/429/network) are not fatal here: they enter
 	// the normal auth-gate flow where the user can retry.
 	if hook == nil {
-		if err := app.client.CheckManagementSupport(); errors.Is(err, ErrManagementUnsupported) {
+		if err := app.client.CheckManagementSupport(); err != nil {
 			return err
 		}
 	}
