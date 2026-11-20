@@ -12,6 +12,58 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
+func TestFileTokenStoreDeletesNestedListedID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "team", "credential.json")
+	if errMkdir := os.Mkdir(filepath.Dir(path), 0o700); errMkdir != nil {
+		t.Fatal(errMkdir)
+	}
+	if errWrite := os.WriteFile(path, []byte(`{"type":"claude"}`), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+
+	ctx := context.Background()
+	store := NewFileTokenStore()
+	store.SetBaseDir(dir)
+	records, errList := store.List(ctx)
+	if errList != nil || len(records) != 1 {
+		t.Fatalf("List() = %v, %v; want one credential", records, errList)
+	}
+	if errDelete := store.Delete(ctx, records[0].ID); errDelete != nil {
+		t.Fatalf("Delete(%q): %v", records[0].ID, errDelete)
+	}
+	if _, errStat := os.Stat(path); !os.IsNotExist(errStat) {
+		t.Fatalf("credential still exists after Delete: stat error = %v", errStat)
+	}
+}
+
+func TestFileTokenStoreDeletesSavedPathWithRelativeBaseDir(t *testing.T) {
+	dir := t.TempDir()
+	cwd, errGetwd := os.Getwd()
+	if errGetwd != nil {
+		t.Fatal(errGetwd)
+	}
+	relativeDir, errRel := filepath.Rel(cwd, dir)
+	if errRel != nil {
+		t.Skipf("cannot make auth directory relative: %v", errRel)
+	}
+	store := NewFileTokenStore()
+	store.SetBaseDir(relativeDir)
+	ctx := context.Background()
+	path, errSave := store.Save(ctx, &cliproxyauth.Auth{
+		ID: "credential.json", Provider: "claude", Metadata: map[string]any{"type": "claude"},
+	})
+	if errSave != nil {
+		t.Fatal(errSave)
+	}
+	if errDelete := store.Delete(ctx, path); errDelete != nil {
+		t.Fatal(errDelete)
+	}
+	if _, errStat := os.Stat(filepath.Join(dir, "credential.json")); !os.IsNotExist(errStat) {
+		t.Fatalf("credential still exists after Delete: stat error = %v", errStat)
+	}
+}
+
 func TestExtractAccessToken(t *testing.T) {
 	t.Parallel()
 
