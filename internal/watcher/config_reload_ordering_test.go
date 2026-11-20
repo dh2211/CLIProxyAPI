@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,61 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
+
+func TestWatcherReloadsAfterRepeatedAtomicConfigReplacement(t *testing.T) {
+	configPath, nextAuthDir := newIssue6631ConfigFile(t)
+	authDir := filepath.Dir(configPath)
+	if errWrite := writeIssue6631Config(configPath, authDir, 1); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	initial, errLoad := config.LoadConfig(configPath)
+	if errLoad != nil {
+		t.Fatal(errLoad)
+	}
+	reloads := make(chan int, 8)
+	w, errNew := NewWatcher(configPath, authDir, func(cfg *config.Config) {
+		reloads <- cfg.RequestRetry
+	})
+	if errNew != nil {
+		t.Fatal(errNew)
+	}
+	t.Cleanup(func() {
+		if errStop := w.Stop(); errStop != nil {
+			t.Error(errStop)
+		}
+	})
+	w.SetConfig(initial)
+	if errStart := w.Start(context.Background()); errStart != nil {
+		t.Fatal(errStart)
+	}
+	awaitRetry := func(want int) {
+		t.Helper()
+		deadline := time.NewTimer(3 * time.Second)
+		defer deadline.Stop()
+		for {
+			select {
+			case got := <-reloads:
+				if got == want {
+					return
+				}
+			case <-deadline.C:
+				t.Fatalf("watcher did not load request-retry: %d", want)
+			}
+		}
+	}
+	awaitRetry(1)
+
+	for _, retry := range []int{2, 3} {
+		replacement := configPath + ".new"
+		if errWrite := writeIssue6631Config(replacement, nextAuthDir, retry); errWrite != nil {
+			t.Fatal(errWrite)
+		}
+		if errRename := os.Rename(replacement, configPath); errRename != nil {
+			t.Fatal(errRename)
+		}
+		awaitRetry(retry)
+	}
+}
 
 func newIssue6631ConfigFile(t *testing.T) (configPath, authDir string) {
 	t.Helper()

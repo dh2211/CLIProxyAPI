@@ -394,12 +394,12 @@ func (s *PostgresStore) Delete(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err = os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("postgres store: delete auth file: %w", err)
-	}
 	relID, err := s.relativeAuthID(path)
 	if err != nil {
 		return err
+	}
+	if err = os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("postgres store: delete auth file: %w", err)
 	}
 	return s.deleteAuthRecord(ctx, relID)
 }
@@ -643,10 +643,10 @@ func (s *PostgresStore) resolveAuthPath(auth *cliproxyauth.Auth) (string, error)
 }
 
 func (s *PostgresStore) resolveDeletePath(id string) (string, error) {
-	if strings.ContainsRune(id, os.PathSeparator) || filepath.IsAbs(id) {
+	if filepath.IsAbs(id) {
 		return id, nil
 	}
-	return filepath.Join(s.authDir, filepath.FromSlash(id)), nil
+	return s.absoluteAuthPath(id)
 }
 
 func (s *PostgresStore) relativeAuthID(path string) (string, error) {
@@ -661,7 +661,7 @@ func (s *PostgresStore) relativeAuthID(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("postgres store: compute relative path: %w", err)
 	}
-	if strings.HasPrefix(rel, "..") {
+	if !filepath.IsLocal(rel) || rel == "." {
 		return "", fmt.Errorf("postgres store: path %s outside managed directory", path)
 	}
 	return filepath.ToSlash(rel), nil
@@ -672,7 +672,7 @@ func (s *PostgresStore) absoluteAuthPath(id string) (string, error) {
 		return "", fmt.Errorf("postgres store: store not initialized")
 	}
 	clean := filepath.Clean(filepath.FromSlash(id))
-	if strings.HasPrefix(clean, "..") {
+	if !filepath.IsLocal(clean) || clean == "." {
 		return "", fmt.Errorf("postgres store: invalid auth identifier %s", id)
 	}
 	path := filepath.Join(s.authDir, clean)
@@ -680,7 +680,7 @@ func (s *PostgresStore) absoluteAuthPath(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.HasPrefix(rel, "..") {
+	if !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("postgres store: resolved auth path escapes auth directory")
 	}
 	return path, nil

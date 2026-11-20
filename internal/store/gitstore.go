@@ -707,8 +707,12 @@ func (s *GitTokenStore) guardWatcherAuthRemovalLocked(message string, relPaths [
 }
 
 func (s *GitTokenStore) resolveDeletePath(id string) (string, error) {
-	if strings.ContainsRune(id, os.PathSeparator) || filepath.IsAbs(id) {
+	if filepath.IsAbs(id) {
 		return id, nil
+	}
+	id = filepath.FromSlash(id)
+	if !filepath.IsLocal(id) || filepath.Clean(id) == "." {
+		return "", fmt.Errorf("auth filestore: invalid auth identifier %q", id)
 	}
 	dir := s.baseDirSnapshot()
 	if dir == "" {

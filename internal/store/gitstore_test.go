@@ -334,6 +334,41 @@ func TestGitTokenStoreRefusesWatcherOriginatedAuthDeletion(t *testing.T) {
 	assertRemoteTreePath(t, remoteDir, "master", "auths/protected.json", true)
 }
 
+func TestGitTokenStoreDeletesNestedListedID(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	remoteDir := setupGitRemoteRepository(t, root, "master",
+		testBranchSpec{name: "master", contents: "remote master branch\n"},
+	)
+	store := NewGitTokenStore(remoteDir, "", "", "")
+	store.SetBaseDir(filepath.Join(root, "workspace", "auths"))
+	if errInit := store.EnsureRepository(); errInit != nil {
+		t.Fatal(errInit)
+	}
+
+	ctx := context.Background()
+	name := filepath.Join("team", "credential.json")
+	path, errSave := store.Save(ctx, &cliproxyauth.Auth{
+		ID: name, FileName: name, Provider: "claude", Metadata: map[string]any{"type": "claude"},
+	})
+	if errSave != nil {
+		t.Fatalf("Save(): %v", errSave)
+	}
+	assertRemoteTreePath(t, remoteDir, "master", "auths/team/credential.json", true)
+	records, errList := store.List(ctx)
+	if errList != nil || len(records) != 1 {
+		t.Fatalf("List() = %v, %v; want one credential", records, errList)
+	}
+	if errDelete := store.Delete(ctx, records[0].ID); errDelete != nil {
+		t.Fatalf("Delete(%q): %v", records[0].ID, errDelete)
+	}
+	if _, errStat := os.Stat(path); !os.IsNotExist(errStat) {
+		t.Fatalf("credential still exists after Delete: stat error = %v", errStat)
+	}
+	assertRemoteTreePath(t, remoteDir, "master", "auths/team/credential.json", false)
+}
+
 func TestGitTokenStoreWatcherRemovalNoOpsAfterExplicitDelete(t *testing.T) {
 	t.Parallel()
 

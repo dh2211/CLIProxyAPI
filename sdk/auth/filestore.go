@@ -88,6 +88,10 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 	if path == "" {
 		return "", fmt.Errorf("auth filestore: missing file path attribute for %s", auth.ID)
 	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("auth filestore: resolve save path: %w", err)
+	}
 
 	// Runtime updates must not recreate a disabled credential whose source file
 	// was deliberately removed. Login and migration callers explicitly mark the
@@ -223,8 +227,12 @@ func (s *FileTokenStore) Delete(ctx context.Context, id string) error {
 }
 
 func (s *FileTokenStore) resolveDeletePath(id string) (string, error) {
-	if strings.ContainsRune(id, os.PathSeparator) || filepath.IsAbs(id) {
+	if filepath.IsAbs(id) {
 		return id, nil
+	}
+	id = filepath.FromSlash(id)
+	if !filepath.IsLocal(id) || filepath.Clean(id) == "." {
+		return "", fmt.Errorf("auth filestore: invalid auth identifier %q", id)
 	}
 	dir := s.baseDirSnapshot()
 	if dir == "" {

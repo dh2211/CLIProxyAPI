@@ -3740,16 +3740,20 @@ func isUsageLimitResultError(err *Error) bool {
 	if err == nil {
 		return false
 	}
-	if isStructuredQuotaCode(err.Code) {
+	msg := strings.TrimSpace(err.Message)
+	resourceExhausted := strings.EqualFold(strings.TrimSpace(err.Code), "resource_exhausted")
+	if isStructuredQuotaCode(err.Code) && !resourceExhausted {
 		return true
 	}
-	msg := strings.TrimSpace(err.Message)
 	if msg == "" {
-		return false
+		return resourceExhausted
 	}
 	msgLower := strings.ToLower(msg)
 	if strings.Contains(msgLower, "check quota") {
 		return false
+	}
+	if resourceExhausted {
+		return true
 	}
 	if strings.Contains(msgLower, "quota") ||
 		strings.Contains(msgLower, "usage_limit_reached") ||

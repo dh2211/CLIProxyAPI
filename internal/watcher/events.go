@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -33,12 +34,21 @@ func (w *Watcher) start(ctx context.Context) error {
 	}
 	log.Debugf("watching config file: %s", w.configPath)
 
+	// A file watch follows the old inode when an editor replaces the config.
+	// The directory watch stays in place and also sees the replacement.
+	configDir := filepath.Dir(w.configPath)
+	if errAddConfigDir := w.watcher.Add(configDir); errAddConfigDir != nil {
+		return fmt.Errorf("watch config directory %s: %w", configDir, errAddConfigDir)
+	}
+
 	w.watchMu.Lock()
 	authDir := w.currentAuthDir()
-	if errAddAuthDir := w.watcher.Add(authDir); errAddAuthDir != nil {
-		w.watchMu.Unlock()
-		log.Errorf("failed to watch auth directory %s: %v", authDir, errAddAuthDir)
-		return errAddAuthDir
+	if !w.sameNormalizedAuthPath(authDir, configDir) {
+		if errAddAuthDir := w.watcher.Add(authDir); errAddAuthDir != nil {
+			w.watchMu.Unlock()
+			log.Errorf("failed to watch auth directory %s: %v", authDir, errAddAuthDir)
+			return errAddAuthDir
+		}
 	}
 	w.started = true
 	w.watchedAuthDir = authDir
@@ -65,7 +75,7 @@ func (w *Watcher) syncAuthDirWatch() {
 	if oldWatched == target {
 		return
 	}
-	if oldWatched != "" && !w.sameNormalizedAuthPath(oldWatched, w.configPath) && !w.sameNormalizedAuthPath(oldWatched, target) {
+	if oldWatched != "" && !w.sameNormalizedAuthPath(oldWatched, filepath.Dir(w.configPath)) && !w.sameNormalizedAuthPath(oldWatched, target) {
 		if errRemove := w.watcher.Remove(oldWatched); errRemove != nil {
 			log.Debugf("failed to remove previous auth directory watch %s: %v", oldWatched, errRemove)
 		}
@@ -79,9 +89,11 @@ func (w *Watcher) syncAuthDirWatch() {
 		w.watchedAuthDir = target
 		return
 	}
-	if errAdd := w.watcher.Add(target); errAdd != nil {
-		log.Errorf("failed to watch auth directory %s: %v", target, errAdd)
-		return
+	if !w.sameNormalizedAuthPath(target, filepath.Dir(w.configPath)) {
+		if errAdd := w.watcher.Add(target); errAdd != nil {
+			log.Errorf("failed to watch auth directory %s: %v", target, errAdd)
+			return
+		}
 	}
 	w.watchedAuthDir = target
 	log.Debugf("watching auth directory: %s", target)
@@ -110,11 +122,9 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	// Filter only relevant events: config file or auth-dir JSON files.
 	configOps := fsnotify.Write | fsnotify.Create | fsnotify.Rename
 	normalizedName := w.normalizeAuthPath(event.Name)
-	normalizedConfigPath := w.normalizeAuthPath(w.configPath)
-	normalizedAuthDir := w.normalizeAuthPath(w.currentAuthDir())
-	isConfigEvent := normalizedName == normalizedConfigPath && event.Op&configOps != 0
+	isConfigEvent := event.Op&configOps != 0 && w.sameNormalizedAuthPath(normalizedName, w.configPath)
 	authOps := fsnotify.Create | fsnotify.Write | fsnotify.Remove | fsnotify.Rename
-	isAuthJSON := filepath.Dir(normalizedName) == normalizedAuthDir && strings.HasSuffix(normalizedName, ".json") && event.Op&authOps != 0
+	isAuthJSON := event.Op&authOps != 0 && strings.HasSuffix(normalizedName, ".json") && w.sameNormalizedAuthPath(filepath.Dir(normalizedName), w.currentAuthDir())
 	if !isConfigEvent && !isAuthJSON {
 		// Ignore unrelated files (e.g., cookie snapshots *.cookie) and other noise.
 		return
